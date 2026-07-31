@@ -1,0 +1,51 @@
+## .NET / Visual Studio .gitignore
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+[Xx]64/
+[Xx]86/
+[Bb]uild/
+bld/
+[Oo]ut/
+[Ll]og/
+[Ll]ogs/
+
+# User-specific files
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.rsuser
+
+# Visual Studio / Rider
+.vs/
+.vscode/
+.idea/
+*.userprefs
+
+# Build results / caches
+project.lock.json
+project.fragment.lock.json
+artifacts/
+*.nupkg
+*.snupkg
+.msbuild.binlog
+
+# Test results
+[Tt]est[Rr]esult*/
+[Bb]uild[Ll]og.*
+coverage*.json
+coverage*.xml
+
+# ASP.NET secrets / local settings
+secrets.json
+appsettings.*.local.json
+
+# Aspire / OpenTelemetry local artifacts
+*.received.*
+.aspire/
+
+# OS files
+.DS_Store
+Thumbs.db
