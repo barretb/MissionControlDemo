@@ -37,11 +37,12 @@
     }
     header .brand { display: flex; align-items: center; gap: 12px; }
     header h1 { font-size: 20px; margin: 0; letter-spacing: .5px; }
-    .badge {
-      font-size: 12px; color: var(--muted);
-      border: 1px solid var(--border); border-radius: 999px;
-      padding: 4px 12px;
+    .dashlink {
+      font-size: 13px; color: var(--accent); text-decoration: none;
+      border: 1px solid var(--accent); border-radius: 999px; padding: 6px 14px;
+      transition: .15s; white-space: nowrap;
     }
+    .dashlink:hover { background: rgba(79,209,255,.12); }
     .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--ok);
            box-shadow: 0 0 12px var(--ok); }
     main {
@@ -55,7 +56,25 @@
     }
     .card h2 { margin: 0 0 14px; font-size: 15px; text-transform: uppercase;
                letter-spacing: 1.5px; color: var(--accent); }
-    .roster { display: flex; flex-direction: column; gap: 10px; }
+    .card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .card-head h2 { margin: 0; }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    /* signal chips strip */
+    .signals {
+      grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+      padding: 14px 20px; border: 1px solid var(--border); border-radius: 14px;
+      background: rgba(255,255,255,.02);
+    }
+    .signals .lead { font-size: 12px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--muted); }
+    .chip {
+      font-size: 12px; font-weight: 700; letter-spacing: .5px; color: #04121a;
+      border-radius: 999px; padding: 5px 14px;
+    }
+    .chip.traces  { background: var(--accent); }
+    .chip.metrics { background: var(--ok); }
+    .chip.logs    { background: var(--warn); }
+    .chip.baggage { background: var(--accent-2); color: #fff; }
+    .roster { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
     .ship {
       display: flex; align-items: center; justify-content: space-between;
       padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px;
@@ -71,8 +90,20 @@
       text-transform: uppercase; letter-spacing: .5px;
     }
     .status.Docked { color: var(--muted); }
-    .status.Launched { color: var(--ok); border-color: var(--ok); }
+    .status.Launched, .status.Success { color: var(--ok); border-color: var(--ok); }
+    .status.InFlight { color: var(--accent); border-color: var(--accent); animation: pulse 1.6s infinite; }
+    .status.Retreat { color: var(--warn); border-color: var(--warn); }
     .status[class*="Failure"] { color: var(--err); border-color: var(--err); }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .45; } }
+    .live-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+                background: var(--accent); box-shadow: 0 0 10px var(--accent); animation: pulse 1.2s infinite; }
+    .gauges { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 14px 0 10px; }
+    .gauge { border: 1px solid var(--border); border-radius: 10px; padding: 12px; text-align: center; }
+    .gauge .num { font-size: 26px; font-weight: 700; }
+    .gauge .lbl { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin-top: 2px; }
+    .shieldbar { height: 8px; border-radius: 999px; background: #0a1120; border: 1px solid var(--border); overflow: hidden; }
+    .shieldbar > div { height: 100%; transition: width .4s ease, background .4s ease; }
+    .tstatus { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
     label { display: block; font-size: 12px; color: var(--muted); margin: 12px 0 6px; }
     input[type=text], select {
       width: 100%; padding: 10px 12px; border-radius: 9px;
@@ -82,17 +113,36 @@
     .row { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
     .row input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--err); }
     .row label { margin: 0; color: var(--text); }
+    button {
+      font-family: var(--font); cursor: pointer; border-radius: 9px;
+      border: 1px solid var(--border); background: #0a1120; color: var(--text);
+      font-size: 12.5px; padding: 7px 12px; transition: .15s;
+    }
+    button:hover:not(:disabled) { border-color: var(--accent); }
+    button:disabled { opacity: .5; cursor: not-allowed; }
     button.launch {
-      margin-top: 18px; width: 100%; padding: 13px; border: none; border-radius: 10px;
-      font-size: 15px; font-weight: 700; letter-spacing: .5px; cursor: pointer;
+      margin-top: 18px; width: 100%; padding: 13px; border: none;
+      font-size: 15px; font-weight: 700; letter-spacing: .5px; border-radius: 10px;
       color: #04121a; background: linear-gradient(90deg, var(--accent), var(--accent-2));
     }
-    button.launch:disabled { opacity: .5; cursor: not-allowed; }
+    button.danger:hover:not(:disabled) { border-color: var(--err); color: var(--err); }
     .selected-hint { font-size: 12px; color: var(--muted); margin-top: 10px; }
+    /* live telemetry stats */
+    .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 4px; }
+    .stat { border: 1px solid var(--border); border-radius: 10px; padding: 12px; text-align: center; }
+    .stat .num { font-size: 26px; font-weight: 700; }
+    .stat .num.ok { color: var(--ok); } .stat .num.err { color: var(--err); }
+    .stat .lbl { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+    .telem-meta { font-size: 12.5px; color: var(--muted); margin-top: 12px; line-height: 1.6; }
+    .placeholder { color: var(--muted); font-size: 13px; }
+    /* baggage inspector */
+    .kv { font-family: "Cascadia Code", Consolas, monospace; font-size: 13px; margin-top: 12px; }
+    .kv .pair { display: flex; gap: 8px; padding: 6px 0; border-bottom: 1px dashed var(--border); }
+    .kv .k { color: var(--accent); } .kv .v { color: var(--ok); }
     .log {
       font-family: "Cascadia Code", Consolas, monospace; font-size: 12.5px;
       background: #060a14; border: 1px solid var(--border); border-radius: 10px;
-      padding: 12px; height: 260px; overflow-y: auto; white-space: pre-wrap;
+      padding: 12px; height: 220px; overflow-y: auto; white-space: pre-wrap; margin-top: 14px;
     }
     .log .info { color: var(--accent); }
     .log .ok { color: var(--ok); }
@@ -111,21 +161,36 @@
       <span class="dot"></span>
       <h1>Mission Control</h1>
     </div>
-    <span class="badge">OpenTelemetry demo &middot; BeerCity Code</span>
+    <a class="dashlink" id="dashLink" href="http://localhost:18888" target="_blank" rel="noopener">Open the Aspire dashboard &rarr;</a>
   </header>
 
   <main>
+    <div class="signals">
+      <span class="lead">OTel signals being emitted:</span>
+      <span class="chip traces">Traces</span>
+      <span class="chip metrics">Metrics</span>
+      <span class="chip logs">Logs</span>
+      <span class="chip baggage">Baggage</span>
+    </div>
+
     <section class="card">
-      <h2>Mission Roster</h2>
+      <div class="card-head">
+        <h2>Mission Roster</h2>
+        <div class="actions">
+          <button id="refreshBtn">&#8635; Refresh</button>
+          <button id="resetBtn" class="danger">&#8634; Reset All</button>
+          <button id="loadBtn">&#9889; Generate Load</button>
+        </div>
+      </div>
       <div id="roster" class="roster">Loading roster&hellip;</div>
     </section>
 
     <section class="card">
       <h2>Launch Control</h2>
-      <label for="commander">Commander</label>
+      <label for="commander">Commander <span style="color:var(--accent-2)">(populates W3C Baggage)</span></label>
       <input type="text" id="commander" value="Kirk" placeholder="Commanding officer" />
 
-      <label for="priority">Priority</label>
+      <label for="priority">Priority <span style="color:var(--accent-2)">(populates W3C Baggage)</span></label>
       <select id="priority">
         <option>Routine</option>
         <option>Priority</option>
@@ -142,7 +207,7 @@
       <div class="selected-hint" id="selectedHint">No mission selected.</div>
 
       <div class="note">
-        Every launch flows Web &rarr; API &rarr; PostgreSQL as one trace. Open the
+        Every launch flows Web &rarr; API &rarr; database as one trace. Open the
         <strong>Aspire dashboard</strong> to see the <strong>trace</strong>, the
         <strong>missions_launched</strong> metric, and the <strong>structured logs</strong>
         (each carries the TraceId/SpanId). Commander &amp; priority ride along as
@@ -150,8 +215,30 @@
       </div>
     </section>
 
+    <section class="card">
+      <h2>Live Telemetry</h2>
+      <div id="telemetry">
+        <div class="placeholder">Select a mission to see its live telemetry.</div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>Baggage Inspector</h2>
+        <button id="baggageBtn">&#128269; Inspect Baggage</button>
+      </div>
+      <p class="placeholder">
+        Key-value pairs that travel <em>automatically</em> from UI &rarr; API via HTTP headers &mdash;
+        no extra code needed. Inspect to see what the API received.
+      </p>
+      <div id="baggage" class="kv"></div>
+    </section>
+
     <section class="card full">
-      <h2>Live Activity Log</h2>
+      <div class="card-head">
+        <h2>Live Activity Log</h2>
+        <button id="clearBtn">Clear</button>
+      </div>
       <div id="log" class="log"></div>
     </section>
   </main>
@@ -159,11 +246,14 @@
   <script>
     let selectedId = null;
     let selectedName = null;
+    let roster = [];
 
     const logEl = document.getElementById('log');
     const rosterEl = document.getElementById('roster');
     const launchBtn = document.getElementById('launchBtn');
     const selectedHint = document.getElementById('selectedHint');
+    const telemetryEl = document.getElementById('telemetry');
+    const baggageEl = document.getElementById('baggage');
 
     function log(msg, cls) {
       const ts = new Date().toLocaleTimeString();
@@ -172,12 +262,15 @@
       logEl.prepend(line);
     }
 
+    function commander() { return document.getElementById('commander').value; }
+    function priority() { return document.getElementById('priority').value; }
+
     async function loadRoster() {
       try {
         const res = await fetch('/api/missions');
-        const missions = await res.json();
+        roster = await res.json();
         rosterEl.innerHTML = '';
-        missions.forEach(m => {
+        roster.forEach(m => {
           const div = document.createElement('div');
           div.className = 'ship' + (m.id === selectedId ? ' selected' : '');
           div.innerHTML =
@@ -187,9 +280,27 @@
           div.onclick = () => selectShip(m.id, m.name);
           rosterEl.appendChild(div);
         });
+        updateLaunchButton();
       } catch (e) {
         rosterEl.textContent = 'Failed to load roster.';
         log('Failed to load roster: ' + e, 'err');
+      }
+    }
+
+    function updateLaunchButton() {
+      if (selectedId === null) {
+        launchBtn.disabled = true;
+        launchBtn.textContent = 'Select a ship to launch';
+        return;
+      }
+      const m = roster.find(x => x.id === selectedId);
+      const name = m ? m.name : selectedName;
+      if (m && m.status === 'In Flight') {
+        launchBtn.disabled = true;
+        launchBtn.textContent = name + ' is on a mission…';
+      } else {
+        launchBtn.disabled = false;
+        launchBtn.textContent = 'Launch ' + name;
       }
     }
 
@@ -197,43 +308,151 @@
       selectedId = id;
       selectedName = name;
       selectedHint.textContent = 'Selected: ' + name;
-      launchBtn.disabled = false;
-      launchBtn.textContent = 'Launch ' + name;
       loadRoster();
+      loadTelemetry();
+    }
+
+    function gauge(label, value, color) {
+      return '<div class="gauge"><div class="num" style="color:' + color + '">' + value +
+             '</div><div class="lbl">' + label + '</div></div>';
+    }
+
+    function renderTelemetry(t) {
+      if (!t || t.warpSpeed === undefined) {
+        telemetryEl.innerHTML = '<div class="placeholder">' +
+          (selectedName || 'This ship') + ' is docked. Launch to begin live telemetry.</div>';
+        return;
+      }
+      const s = Math.max(0, t.shieldStrength);
+      const shieldColor = s > 50 ? 'var(--ok)' : (s > 20 ? 'var(--warn)' : 'var(--err)');
+      const statusCls = t.status.replace(/\s/g, '');
+      telemetryEl.innerHTML =
+        '<div class="tstatus"><span class="status ' + statusCls + '">' + t.status + '</span>' +
+          (t.active ? '<span class="live-dot"></span> live &middot; updating every 2s' : ' &middot; mission ended') +
+        '</div>' +
+        '<div class="gauges">' +
+          gauge('Warp', Number(t.warpSpeed).toFixed(1), 'var(--accent)') +
+          gauge('Shields', s + '%', shieldColor) +
+          gauge('Torpedoes', t.photonTorpedoes, 'var(--accent-2)') +
+        '</div>' +
+        '<div class="shieldbar"><div style="width:' + s + '%;background:' + shieldColor + '"></div></div>' +
+        '<div class="telem-meta">Elapsed ' + t.elapsedSeconds + 's / ' + t.durationSeconds + 's target<br/>' +
+          'Last event: ' + t.lastEvent + '<br/>' +
+          'Commander ' + t.commander + ' &middot; ' + t.priority + '</div>';
+    }
+
+    async function loadTelemetry() {
+      if (selectedId === null) return;
+      try {
+        const t = await (await fetch('/api/missions/' + selectedId + '/telemetry')).json();
+        renderTelemetry(t);
+      } catch (e) {
+        telemetryEl.innerHTML = '<div class="placeholder">Failed to load telemetry.</div>';
+      }
     }
 
     async function launch() {
       if (selectedId === null) return;
-      const body = {
-        commander: document.getElementById('commander').value,
-        priority: document.getElementById('priority').value,
-        forceFailure: document.getElementById('forceFailure').checked
-      };
+      const body = { commander: commander(), priority: priority(), forceFailure: document.getElementById('forceFailure').checked };
       launchBtn.disabled = true;
       log('Launching ' + selectedName + ' (commander ' + body.commander + ', priority ' + body.priority + ')&hellip;', 'info');
       try {
         const res = await fetch('/api/missions/' + selectedId + '/launch', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body)
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
         });
-        const text = await res.text();
-        if (res.ok) {
-          log('LAUNCH CONFIRMED: ' + text, 'ok');
+        if (res.status === 409) {
+          log(selectedName + ' is already on a mission.', 'err');
+        } else if (res.ok || res.status === 202) {
+          log('LAUNCH INITIATED: ' + selectedName + ' is under way &mdash; watch live telemetry &amp; the Aspire dashboard.', 'ok');
         } else {
-          log('LAUNCH FAILED (' + res.status + '): ' + text, 'err');
+          log('LAUNCH FAILED (' + res.status + '): ' + await res.text(), 'err');
         }
       } catch (e) {
         log('Launch request error: ' + e, 'err');
       } finally {
-        launchBtn.disabled = false;
         loadRoster();
+        loadTelemetry();
       }
     }
 
+    async function resetAll() {
+      log('Resetting roster&hellip;', 'info');
+      try {
+        const res = await fetch('/api/missions/reset', { method: 'POST' });
+        const t = await res.json();
+        log('Roster reset: ' + t.reset + ' missions returned to Docked.', 'ok');
+        selectedId = null; selectedName = null;
+        launchBtn.disabled = true; launchBtn.textContent = 'Select a ship to launch';
+        selectedHint.textContent = 'No mission selected.';
+        telemetryEl.innerHTML = '<div class="placeholder">Select a mission to see its live telemetry.</div>';
+        loadRoster();
+      } catch (e) {
+        log('Reset error: ' + e, 'err');
+      }
+    }
+
+    async function generateLoad() {
+      const btn = document.getElementById('loadBtn');
+      btn.disabled = true;
+      log('Generating load: launching every docked ship&hellip;', 'info');
+      try {
+        const missions = await (await fetch('/api/missions')).json();
+        const commanders = ['Kirk', 'Picard', 'Sisko', 'Janeway', 'Archer'];
+        const priorities = ['Routine', 'Priority', 'Urgent', 'Red Alert'];
+        let launched = 0;
+        for (const m of missions) {
+          if (m.status === 'In Flight') continue;
+          const body = {
+            commander: commanders[Math.floor(Math.random() * commanders.length)],
+            priority: priorities[Math.floor(Math.random() * priorities.length)],
+            forceFailure: Math.random() < 0.2
+          };
+          const res = await fetch('/api/missions/' + m.id + '/launch', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+          });
+          if (res.ok || res.status === 202) { launched++; log('Launched ' + m.name + ' (' + body.commander + '/' + body.priority + ')', 'ok'); }
+        }
+        log(launched + ' ship(s) now flying — Traces &amp; Metrics will fill for ~20-40s.', 'ok');
+      } catch (e) {
+        log('Load error: ' + e, 'err');
+      } finally {
+        btn.disabled = false;
+        loadRoster();
+        loadTelemetry();
+      }
+    }
+
+    async function inspectBaggage() {
+      log('Inspecting baggage (commander ' + commander() + ', priority ' + priority() + ')&hellip;', 'info');
+      try {
+        const q = '?commander=' + encodeURIComponent(commander()) + '&priority=' + encodeURIComponent(priority());
+        const items = await (await fetch('/api/baggage' + q)).json();
+        const keys = Object.keys(items);
+        baggageEl.innerHTML = keys.length
+          ? keys.map(k => '<div class="pair"><span class="k">' + k + '</span><span class="v">' + items[k] + '</span></div>').join('')
+          : '<div class="placeholder">No baggage received.</div>';
+        log('API received ' + keys.length + ' baggage item(s) via the propagated header.', 'ok');
+      } catch (e) {
+        baggageEl.innerHTML = '<div class="placeholder">Failed to read baggage.</div>';
+        log('Baggage error: ' + e, 'err');
+      }
+    }
+
+    document.getElementById('refreshBtn').onclick = () => { log('Roster refreshed.', 'info'); loadRoster(); };
+    document.getElementById('resetBtn').onclick = resetAll;
+    document.getElementById('loadBtn').onclick = generateLoad;
+    document.getElementById('baggageBtn').onclick = inspectBaggage;
+    document.getElementById('clearBtn').onclick = () => { logEl.innerHTML = ''; };
     launchBtn.onclick = launch;
+
     loadRoster();
     log('Mission Control online. Awaiting orders.', 'info');
+
+    // Live refresh: pull roster statuses and the selected ship's telemetry every 2s.
+    setInterval(() => {
+      loadRoster();
+      if (selectedId !== null) loadTelemetry();
+    }, 2000);
   </script>
 </body>
 </html>

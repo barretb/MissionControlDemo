@@ -19,7 +19,18 @@ app.MapDefaultEndpoints();
 
 // Serve the single-page dashboard from wwwroot/index.html.
 app.UseDefaultFiles();
-app.UseStaticFiles();
+app.UseStaticFiles(new StaticFileOptions
+{
+    // Without Cache-Control, browsers heuristically cache index.html and can keep showing a
+    // stale page after the app changes. "no-cache" forces revalidation on every load.
+    OnPrepareResponse = ctx =>
+    {
+        if (ctx.File.Name.EndsWith(".html", StringComparison.OrdinalIgnoreCase))
+        {
+            ctx.Context.Response.Headers.CacheControl = "no-cache";
+        }
+    }
+});
 
 // -------------------------------------------------------------------------------------------------
 // Thin proxy: GET /api/missions -> API GET /api/missions
@@ -38,6 +49,17 @@ app.MapGet("/api/missions/{id:int}/launches", async (int id, IHttpClientFactory 
 {
     var client = factory.CreateClient("api");
     var response = await client.GetAsync($"/api/missions/{id}/launches");
+    var payload = await response.Content.ReadAsStringAsync();
+    return Results.Content(payload, "application/json", statusCode: (int)response.StatusCode);
+});
+
+// -------------------------------------------------------------------------------------------------
+// Thin proxy: GET /api/missions/{id}/telemetry -> API live flight snapshot (Live Telemetry panel).
+// -------------------------------------------------------------------------------------------------
+app.MapGet("/api/missions/{id:int}/telemetry", async (int id, IHttpClientFactory factory) =>
+{
+    var client = factory.CreateClient("api");
+    var response = await client.GetAsync($"/api/missions/{id}/telemetry");
     var payload = await response.Content.ReadAsStringAsync();
     return Results.Content(payload, "application/json", statusCode: (int)response.StatusCode);
 });

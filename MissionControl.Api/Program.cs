@@ -1,7 +1,9 @@
 using System.Diagnostics;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using MissionControl.Api.Data;
 using MissionControl.Api.Models;
+using MissionControl.Api.Simulation;
 using MissionControl.ServiceDefaults;
 using OpenTelemetry;
 
@@ -10,12 +12,21 @@ var builder = WebApplication.CreateBuilder(args);
 // Aspire ServiceDefaults: OpenTelemetry (logs/metrics/traces), health checks, service discovery.
 builder.AddServiceDefaults();
 
-// Aspire integration: reads the "missionsdb" connection string injected by the AppHost and
-// wires EF Core + Npgsql, including built-in DB instrumentation (spans for queries).
-builder.AddNpgsqlDbContext<MissionDbContext>("missionsdb");
+// In-memory SQLite: real SQL (so EF Core spans still show up in traces) with zero persistence —
+// the database exists only while the app runs, so every run starts fresh. A named shared-cache
+// in-memory database lives as long as at least one connection stays open; this keep-alive
+// connection is registered as a singleton so DI holds it (and the data) for the app's lifetime.
+const string inMemoryConnectionString = "Data Source=missionsdb;Mode=Memory;Cache=Shared";
+var keepAliveConnection = new SqliteConnection(inMemoryConnectionString);
+keepAliveConnection.Open();
+builder.Services.AddSingleton(keepAliveConnection);
+builder.Services.AddDbContext<MissionDbContext>(options => options.UseSqlite(inMemoryConnectionString));
 
 // Register the custom missions_launched counter wrapper (see MissionMetrics).
 builder.Services.AddMissionMetrics();
+
+// Background flight simulator: emits live traces + metrics every 2s per active mission.
+builder.Services.AddSingleton<MissionSimulator>();
 
 builder.Services.AddProblemDetails();
 
@@ -90,9 +101,12 @@ app.MapGet("/api/missions/{id:int}/launches", async (int id, MissionDbContext db
 // POST /api/missions/reset - return every ship to "Docked".
 // Wrapped in a manual span and logged, so "Reset All" also shows up as telemetry.
 // -------------------------------------------------------------------------------------------------
-app.MapPost("/api/missions/reset", async (MissionDbContext db, ILogger<Program> logger) =>
+app.MapPost("/api/missions/reset", async (MissionDbContext db, MissionSimulator simulator, ILogger<Program> logger) =>
 {
     using var activity = MissionTelemetry.ActivitySource.StartActivity("ResetRoster", ActivityKind.Internal);
+
+    // Abort any in-flight missions first, then dock everything.
+    simulator.CancelAll();
 
     var missions = await db.Missions.ToListAsync();
     foreach (var m in missions)
@@ -108,15 +122,29 @@ app.MapPost("/api/missions/reset", async (MissionDbContext db, ILogger<Program> 
 });
 
 // -------------------------------------------------------------------------------------------------
+// GET /api/missions/{id}/telemetry - live flight snapshot (warp / shields / torpedoes / status).
+// Polled by the UI every ~2s so the Live Telemetry panel shows real-time values.
+// -------------------------------------------------------------------------------------------------
+app.MapGet("/api/missions/{id:int}/telemetry", (int id, MissionSimulator simulator) =>
+{
+    var snapshot = simulator.GetSnapshot(id);
+    return snapshot is not null
+        ? Results.Ok(snapshot)
+        : Results.Ok(new { missionId = id, active = false });
+});
+
+// -------------------------------------------------------------------------------------------------
 // POST /api/missions/{id}/launch - the demo centerpiece.
-// Shows: reading Baggage, a manual span, the reusable DB-span factory, the custom counter,
-// structured logging (auto-carries TraceId/SpanId), and the "force failure" error path.
+// Shows: reading Baggage, a manual span, the custom counter, and structured logging. The launch
+// kicks off a background flight (MissionSimulator) that emits live traces + metrics every 2s until
+// it ends in Success, Failure (shields hit 0), or Retreat (torpedoes hit 0).
 // -------------------------------------------------------------------------------------------------
 app.MapPost("/api/missions/{id:int}/launch", async (
     int id,
     LaunchRequest request,
     MissionDbContext db,
     MissionMetrics metrics,
+    MissionSimulator simulator,
     ILogger<Program> logger) =>
 {
     var mission = await db.Missions.FindAsync(id);
@@ -125,86 +153,42 @@ app.MapPost("/api/missions/{id:int}/launch", async (
         return Results.NotFound(new { message = $"No mission with id {id}." });
     }
 
+    // LAUNCH LOCK: a ship already on a mission cannot launch again until the current mission ends.
+    if (simulator.IsActive(id))
+    {
+        return Results.Conflict(new { message = $"{mission.Name} is already on a mission." });
+    }
+
     // BAGGAGE: read commander/priority propagated from the Web tier via the W3C "baggage" header.
     // Fall back to the request body if baggage was not set.
     var commander = Baggage.GetBaggage("mission.commander") ?? request.Commander ?? "Unknown";
     var priority = Baggage.GetBaggage("mission.priority") ?? request.Priority ?? "Routine";
 
-    // MANUAL SPAN: an internal span for the whole launch operation, nested under the ASP.NET
-    // Core server span. Created from the shared ActivitySource registered in ServiceDefaults.
+    // MANUAL SPAN: an internal span for the launch action, nested under the ASP.NET Core server span.
     using var activity = MissionTelemetry.ActivitySource.StartActivity("LaunchMission", ActivityKind.Internal);
     activity?.SetTag("mission.id", mission.Id);
     activity?.SetTag("mission.name", mission.Name);
     activity?.SetTag("mission.registry", mission.Registry);
     activity?.SetTag("mission.commander", commander);
     activity?.SetTag("mission.priority", priority);
+    activity?.SetTag("mission.force_failure", request.ForceFailure);
 
-    var launch = new Launch
-    {
-        MissionId = mission.Id,
-        Commander = commander,
-        Priority = priority,
-        LaunchedAtUtc = DateTime.UtcNow,
-        Success = !request.ForceFailure
-    };
-
-    // FORCE FAILURE path: error log + error span + recorded exception + HTTP 500.
-    if (request.ForceFailure)
-    {
-        mission.Status = "Launch Failure";
-
-        // REUSABLE SPAN FACTORY: wrap the DB write; the span is auto-tagged with the Launch's
-        // properties as db.entity.* attributes.
-        using (MissionTelemetry.ActivitySource.StartDatabaseSpan("db.launch.insert", launch))
-        {
-            db.Launches.Add(launch);
-            await db.SaveChangesAsync();
-        }
-
-        // Custom metric, tagged with the ship name and success=false.
-        metrics.MissionLaunched(mission.Name, success: false);
-
-        var failure = new InvalidOperationException($"Warp core breach during launch of {mission.Name}.");
-        activity?.SetStatus(ActivityStatusCode.Error, failure.Message);
-        activity?.AddException(failure); // records an exception event on the span
-
-        // Structured log. Because logs flow through OpenTelemetry, this record carries TraceId/SpanId.
-        logger.LogError(failure,
-            "Mission launch FAILED: {MissionName}, commander {Commander}, status {Status}",
-            mission.Name, commander, mission.Status);
-
-        return Results.Problem(
-            title: "Launch failure",
-            detail: failure.Message,
-            statusCode: StatusCodes.Status500InternalServerError);
-    }
-
-    // SUCCESS path.
-    mission.Status = "Launched";
-
-    using (MissionTelemetry.ActivitySource.StartDatabaseSpan("db.launch.insert", launch))
-    {
-        db.Launches.Add(launch);
-        await db.SaveChangesAsync();
-    }
-
+    // Mark the ship as flying and count the launch.
+    mission.Status = "In Flight";
+    await db.SaveChangesAsync();
     metrics.MissionLaunched(mission.Name, success: true);
 
-    logger.LogInformation(
-        "Mission launch requested: {MissionName}, commander {Commander}, status {Status}",
-        mission.Name, commander, mission.Status);
+    // Begin the continuous-telemetry flight in the background.
+    simulator.TryStart(mission, commander, priority, request.ForceFailure);
 
-    return Results.Ok(new
-    {
-        mission.Id,
-        mission.Name,
-        mission.Registry,
-        mission.Status,
-        launch.Commander,
-        launch.Priority,
-        launch.Success,
-        launch.LaunchedAtUtc
-    });
+    logger.LogInformation(
+        "Mission launch initiated: {MissionName}, commander {Commander}, priority {Priority}",
+        mission.Name, commander, priority);
+
+    // 202 Accepted: the mission is now under way; poll /telemetry for live values.
+    return Results.Accepted(
+        $"/api/missions/{id}/telemetry",
+        simulator.GetSnapshot(id) ?? (object)new { mission.Id, mission.Name, status = "In Flight" });
 });
 
 app.Run();

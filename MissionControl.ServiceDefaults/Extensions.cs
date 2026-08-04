@@ -83,7 +83,8 @@ public static class Extensions
                     // Register OUR ActivitySource so manual spans (LaunchMission, db.*) are exported.
                     .AddSource(MissionTelemetry.ActivitySourceName)
                     .AddAspNetCoreInstrumentation()   // server spans for incoming requests
-                    .AddHttpClientInstrumentation();  // client spans + W3C context/baggage propagation
+                    .AddHttpClientInstrumentation()   // client spans + W3C context/baggage propagation
+                    .AddEntityFrameworkCoreInstrumentation();  // DB spans for EF Core queries (works with SQLite)
             });
 
         builder.AddOpenTelemetryExporters();

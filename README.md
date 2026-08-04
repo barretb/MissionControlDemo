@@ -1,17 +1,17 @@
 # Mission Control — OpenTelemetry with .NET Aspire
 
-A beginner-friendly sample for the **BeerCity Code** talk on OpenTelemetry in .NET.
+A beginner-friendly sample for a conference talk on OpenTelemetry in .NET.
 You launch Star Trek starship missions from a web dashboard; every launch produces a
 distributed **trace**, a custom **metric**, structured **logs**, and propagated **baggage** —
 all visible in the **.NET Aspire dashboard**.
 
-Stack: **.NET 10** + **Aspire 13** + **PostgreSQL** + **OpenTelemetry**.
+Stack: **.NET 10** + **Aspire 13** + **EF Core (in-memory SQLite)** + **OpenTelemetry**.
 
 ---
 
 ## What you'll see
 
-A launch flows **Web → API → PostgreSQL** as a single trace and demonstrates:
+A launch flows **Web → API → database** as a single trace and demonstrates:
 
 - **Traces / spans** — automatic ASP.NET Core + HttpClient + EF Core spans, plus a manual
   `LaunchMission` span and a reusable `db.launch.insert` span.
@@ -28,7 +28,9 @@ A launch flows **Web → API → PostgreSQL** as a single trace and demonstrates
 
 - **.NET 10 SDK**
 - **.NET Aspire 13** — the Aspire CLI and/or workload (`aspire --version` should report 13.x)
-- **Docker** (or Podman) running — Aspire starts PostgreSQL and pgAdmin as containers
+
+No Docker needed: the API uses an in-memory SQLite database, so nothing persists between runs —
+every start begins with a clean roster.
 
 ---
 
@@ -47,8 +49,19 @@ dotnet run --project MissionControl.AppHost
 The Aspire dashboard opens automatically. From the dashboard:
 
 1. Open the **missioncontrol-web** endpoint — the Mission Control dashboard.
-2. Pick a ship, set a commander + priority, and click **Launch**.
-3. Toggle **Force failure** to generate an error trace/log.
+2. Pick a ship, set a commander + priority, and click **Launch**. The ship enters **In Flight**
+   and cannot launch again until the mission ends.
+3. Watch the **Live Telemetry** panel: every 2 seconds a random event changes the ship's
+   **warp speed**, **shield strength**, and **photon torpedoes** — each tick recorded as a trace
+   span and metric sample.
+4. Missions end on their own:
+   - **Shields reach 0 → Failure** (the mission's root span is marked as an error).
+   - **Torpedoes reach 0 → Retreat.**
+   - **Otherwise, after a random 20–40s → Success.**
+5. Toggle **Force failure** to bias a launch toward a fast shield collapse.
+6. Use **Generate Load** to launch every docked ship at once (fills Traces & Metrics for ~20–40s),
+   **Reset All** to abort flights and re-dock, and **Inspect Baggage** to see the key-value context
+   the API received via header propagation.
 
 ---
 
@@ -56,10 +69,10 @@ The Aspire dashboard opens automatically. From the dashboard:
 
 | Dashboard tab   | What to point at                                                                 |
 |-----------------|----------------------------------------------------------------------------------|
-| **Traces**      | A launch trace spanning `missioncontrol-web` → `missioncontrol-api` → Postgres. Expand to see `LaunchMission`, `db.launch.insert` (with `db.entity.*` tags), and the baggage/tags. Failed launches show a red error span with an exception event. |
-| **Metrics**     | `missions_launched` under the `missioncontrol-api` resource. Filter/group by the `mission.name` and `mission.success` tags. |
-| **Structured logs** | The "Mission launch requested…" / "Mission launch FAILED…" entries, each linked to its trace via TraceId/SpanId. |
-| **Resources**   | The Postgres + pgAdmin containers and both projects, with health status.         |
+| **Traces**      | The `LaunchMission` request trace (`missioncontrol-web` → `missioncontrol-api` → SQLite) **plus** a long-lived `Mission: {ship}` root span with a `mission.tick` child span every 2s carrying warp/shields/torpedoes tags. A mission that ends in Failure shows a red error span with an exception event. |
+| **Metrics**     | `missions_launched` (counter), the live gauges `mission.warp_speed`, `mission.shield_strength`, `mission.photon_torpedoes`, and the counters `mission.events` (by `event`) and `mission.completed` (by `outcome`). Group any of them by the `mission.name` tag. |
+| **Structured logs** | The per-tick "Mission {Ship}: {Event}…" lines and the "Mission {Ship} ended: {Outcome}…" entries, each linked to its trace via TraceId/SpanId. |
+| **Resources**   | Both projects, with health status and endpoints.                                 |
 
 ---
 
@@ -72,11 +85,12 @@ The Aspire dashboard opens automatically. From the dashboard:
 | **Reusable span factory** (advanced) | `MissionControl.ServiceDefaults/MissionTelemetry.cs` → `StartDatabaseSpan<T>` | Starts an internal span and auto-tags entity properties as `db.entity.*` via safe reflection. |
 | **Custom metric counter** (advanced) | `MissionControl.ServiceDefaults/MissionTelemetry.cs` → `MissionMetrics` + `AddMissionMetrics()` | `Counter<long>` named `missions_launched` created via `IMeterFactory`, wrapped in a DI singleton. |
 | **Manual span + tags** | `MissionControl.Api/Program.cs` → launch endpoint | `ActivitySource.StartActivity("LaunchMission", ...)` and `SetTag(...)`. |
+| **Continuous telemetry** (2s ticks) | `MissionControl.Api/Simulation/MissionSimulator.cs` | Long-lived root span + per-tick child spans, live gauges (`mission.warp_speed`/`shield_strength`/`photon_torpedoes`), event/outcome counters, and per-tick structured logs. End conditions set Success / Failure / Retreat. |
 | **Baggage — set** | `MissionControl.Web/Program.cs` → launch proxy | `Baggage.SetBaggage("mission.commander", ...)` before the HttpClient call. |
 | **Baggage — read + propagation** | `MissionControl.Api/Program.cs` + `GET /api/baggage` | `Baggage.GetBaggage("mission.commander")` — arrives via the `baggage` header automatically. |
 | **Structured logging w/ trace correlation** | `MissionControl.Api/Program.cs` | `logger.LogInformation("Mission launch requested: {MissionName}, commander {Commander}, status {Status}", ...)`. |
 | **Error spans + error logs** | `MissionControl.Api/Program.cs` (force-failure path) | `activity.SetStatus(ActivityStatusCode.Error, ...)`, `activity.AddException(ex)`, `logger.LogError(...)`. |
-| **Orchestration + wiring** | `MissionControl.AppHost/Program.cs` | `AddPostgres().AddDatabase()`, `AddProject<Projects.MissionControl_Api>()`, references + service discovery. |
+| **Orchestration + wiring** | `MissionControl.AppHost/Program.cs` | `AddProject<Projects.MissionControl_Api>()`, references + service discovery. |
 
 ---
 
@@ -86,17 +100,20 @@ The Aspire dashboard opens automatically. From the dashboard:
 MissionControlDemo/
 ├─ MissionControlDemo.sln
 ├─ Directory.Packages.props        # central package versions (.NET 10 / Aspire 13)
-├─ MissionControl.AppHost/         # Aspire orchestrator: Postgres + API + Web
+├─ MissionControl.AppHost/         # Aspire orchestrator: API + Web
 ├─ MissionControl.ServiceDefaults/ # OTel config + custom telemetry (the talk's core)
-├─ MissionControl.Api/             # Minimal API + EF Core/Npgsql + seeded roster
+├─ MissionControl.Api/             # Minimal API + EF Core (in-memory SQLite) + seeded roster
 └─ MissionControl.Web/             # Static dashboard + baggage-setting proxy
 ```
 
 ## API endpoints
 
 - `GET  /api/missions` — the roster
-- `POST /api/missions/{id}/launch` — body `{ "commander", "priority", "forceFailure" }`
-- `GET  /api/baggage` — echoes current baggage (propagation demo)
+- `GET  /api/missions/{id}/telemetry` — **live flight snapshot** (warp / shields / torpedoes / status), polled every 2s by the Live Telemetry panel
+- `GET  /api/missions/{id}/launches` — launch history + aggregate stats for one mission
+- `POST /api/missions/{id}/launch` — body `{ "commander", "priority", "forceFailure" }`; starts a background flight. Returns `409` if the ship is already on a mission.
+- `POST /api/missions/reset` — abort any flights and return every ship to Docked (Reset All)
+- `GET  /api/baggage` — echoes current baggage (propagation demo / Baggage Inspector)
 
 ---
 
