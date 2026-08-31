@@ -65,6 +65,19 @@ app.MapGet("/api/missions/{id:int}/telemetry", async (int id, IHttpClientFactory
 });
 
 // -------------------------------------------------------------------------------------------------
+// Thin proxy: POST /api/missions/{id}/debrief -> API AI debrief.
+// The model call happens in the API, so this trace spans Web -> API -> model, with the gen_ai
+// span sitting at the bottom of the same waterfall as the launch that produced the flight data.
+// -------------------------------------------------------------------------------------------------
+app.MapPost("/api/missions/{id:int}/debrief", async (int id, IHttpClientFactory factory) =>
+{
+    var client = factory.CreateClient("api");
+    var response = await client.PostAsync($"/api/missions/{id}/debrief", content: null);
+    var payload = await response.Content.ReadAsStringAsync();
+    return Results.Content(payload, "application/json", statusCode: (int)response.StatusCode);
+});
+
+// -------------------------------------------------------------------------------------------------
 // Thin proxy: POST /api/missions/reset -> API reset roster.
 // -------------------------------------------------------------------------------------------------
 app.MapPost("/api/missions/reset", async (IHttpClientFactory factory) =>

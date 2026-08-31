@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.AI;
+using MissionControl.Api.Ai;
 using MissionControl.Api.Data;
 using MissionControl.Api.Models;
 using MissionControl.Api.Simulation;
@@ -27,6 +29,49 @@ builder.Services.AddMissionMetrics();
 
 // Background flight simulator: emits live traces + metrics every 2s per active mission.
 builder.Services.AddSingleton<MissionSimulator>();
+
+// -------------------------------------------------------------------------------------------------
+// TALK HIGHLIGHT - GenAI observability.
+//
+// The chat pipeline is built as: [OpenTelemetry wrapper] -> [some IChatClient].
+//
+// The wrapper is what emits the "chat" span with gen_ai.* attributes plus the token-usage and
+// operation-duration metrics. It instruments the IChatClient INTERFACE, so it does not know or
+// care which implementation sits underneath - the telemetry is identical either way. That is the
+// same vendor-neutrality argument as OTLP, one layer up the stack.
+//
+// Default is a simulated client so the demo runs with no API key and no network. To use a real
+// model instead, set OpenAI:ApiKey (and optionally OpenAI:Model) in configuration or user secrets:
+//
+//     dotnet user-secrets set "OpenAI:ApiKey" "sk-..."
+//
+// Nothing else changes - not the service, not the endpoint, not the telemetry registration.
+// -------------------------------------------------------------------------------------------------
+builder.Services.AddSingleton<IChatClient>(sp =>
+{
+    var config = sp.GetRequiredService<IConfiguration>();
+    var apiKey = config["OpenAI:ApiKey"];
+    var model = config["OpenAI:Model"] ?? "gpt-4o-mini";
+
+    IChatClient inner = string.IsNullOrWhiteSpace(apiKey)
+        ? new SimulatedChatClient()
+        : new OpenAI.OpenAIClient(apiKey).GetChatClient(model).AsIChatClient();
+
+    return new ChatClientBuilder(inner)
+        .UseOpenTelemetry(
+            sourceName: MissionTelemetry.ChatSourceName,
+            configure: o =>
+            {
+                // Prompts and completions are NOT captured by default, and that default is
+                // correct: model content is the single most likely place for PII to leak into
+                // your observability platform. Turn it on knowingly, in environments where the
+                // content is safe to store, and never as a blanket production setting.
+                o.EnableSensitiveData = config.GetValue("OpenAI:CaptureContent", false);
+            })
+        .Build();
+});
+
+builder.Services.AddSingleton<MissionDebriefService>();
 
 builder.Services.AddProblemDetails();
 
@@ -134,6 +179,23 @@ app.MapGet("/api/missions/{id:int}/telemetry", (int id, MissionSimulator simulat
 });
 
 // -------------------------------------------------------------------------------------------------
+// POST /api/missions/{id}/debrief - ask a model to narrate what happened on the last flight.
+// The GenAI half of the demo: produces a mission.debrief span with a "chat" child carrying
+// gen_ai.* attributes, token metrics, and a correlated structured log.
+// -------------------------------------------------------------------------------------------------
+app.MapPost("/api/missions/{id:int}/debrief", async (
+    int id,
+    MissionDebriefService debriefs,
+    CancellationToken cancellationToken) =>
+{
+    var debrief = await debriefs.GenerateAsync(id, cancellationToken);
+
+    return debrief is not null
+        ? Results.Ok(debrief)
+        : Results.NotFound(new { message = $"Mission {id} has no flight to debrief yet." });
+});
+
+// -------------------------------------------------------------------------------------------------
 // POST /api/missions/{id}/launch - the demo centerpiece.
 // Shows: reading Baggage, a manual span, the custom counter, and structured logging. The launch
 // kicks off a background flight (MissionSimulator) that emits live traces + metrics every 2s until
@@ -176,14 +238,16 @@ app.MapPost("/api/missions/{id:int}/launch", async (
     // Mark the ship as flying and count the launch.
     mission.Status = "In Flight";
     await db.SaveChangesAsync();
-    metrics.MissionLaunched(mission.Name, success: true);
+    metrics.MissionLaunched(mission.Name);
 
     // Begin the continuous-telemetry flight in the background.
     simulator.TryStart(mission, commander, priority, request.ForceFailure);
 
+    // STRUCTURED LOG: named placeholders, so MissionName / Commander / Priority / Status arrive as
+    // queryable attributes rather than being concatenated into an opaque string.
     logger.LogInformation(
-        "Mission launch initiated: {MissionName}, commander {Commander}, priority {Priority}",
-        mission.Name, commander, priority);
+        "Mission launch requested: {MissionName}, commander {Commander}, priority {Priority}, status {Status}",
+        mission.Name, commander, priority, mission.Status);
 
     // 202 Accepted: the mission is now under way; poll /telemetry for live values.
     return Results.Accepted(

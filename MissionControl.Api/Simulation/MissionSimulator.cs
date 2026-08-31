@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging;
 using MissionControl.Api.Data;
 using MissionControl.Api.Models;
 using MissionControl.ServiceDefaults;
+using OpenTelemetry;
 
 namespace MissionControl.Api.Simulation;
 
@@ -32,8 +33,13 @@ public sealed record MissionSnapshot(
 ///
 /// Runs a background "flight" for each launched mission. Every 2 seconds a random event fires and
 /// the ship's warp speed, shield strength, and photon-torpedo count change. Each tick is recorded as:
-///   * a TRACE span ("mission.tick") parented to a long-lived "Mission: {ship}" root span, and
+///   * a TRACE span ("mission.tick") parented to a long-lived "Mission: {ship}" span, and
 ///   * METRICS (gauges for warp/shields/torpedoes, counters for events and outcomes).
+///
+/// The "Mission: {ship}" span is NOT a trace root. The flight starts inside the launch request, and
+/// Task.Run captures the ExecutionContext, so the span inherits Activity.Current and the entire
+/// 20-40s flight shares the launch request's TraceId. That is what lets you click the launch log
+/// line in the dashboard and land in a waterfall that contains every tick.
 ///
 /// End conditions:
 ///   * shields reach 0            -> Failure
@@ -112,11 +118,21 @@ public sealed class MissionSimulator : IDisposable
     {
         var rng = new Random();
 
-        // One long-lived root span for the whole mission; each tick is a child span.
+        // BAGGAGE: read the commander from ambient W3C Baggage rather than from a parameter.
+        // TryStart was called from inside the launch request, and Task.Run captures the
+        // ExecutionContext - which carries Baggage.Current - so the value the Web tier set is
+        // still in scope here, on a background thread, seconds after the HTTP request finished.
+        // That is the "it rode along without being passed" claim, made checkable on every span.
+        var commander = Baggage.GetBaggage("mission.commander") ?? run.Commander;
+        var priority = Baggage.GetBaggage("mission.priority") ?? run.Priority;
+
+        // One long-lived span for the whole mission; each tick is a child span. Note this is NOT a
+        // trace root: it inherits Activity.Current from the launch request, so the whole flight
+        // shares the launch's TraceId - which is why the launch log line leads here.
         using var root = MissionTelemetry.ActivitySource.StartActivity($"Mission: {run.Name}", ActivityKind.Internal);
         root?.SetTag("mission.name", run.Name);
-        root?.SetTag("mission.commander", run.Commander);
-        root?.SetTag("mission.priority", run.Priority);
+        root?.SetTag("mission.commander", commander);
+        root?.SetTag("mission.priority", priority);
         root?.SetTag("mission.duration_seconds", run.DurationSeconds);
 
         var start = DateTime.UtcNow;
@@ -132,11 +148,14 @@ public sealed class MissionSimulator : IDisposable
                 var evt = ApplyEvent(run, rng);
                 run.LastEvent = evt;
 
-                // TRACE: a child span for this tick, parented to the mission root span.
+                // TRACE: a child span for this tick, parented to the long-lived mission span.
                 using (var tick = MissionTelemetry.ActivitySource.StartActivity(
                     "mission.tick", ActivityKind.Internal, root?.Context ?? default))
                 {
                     tick?.SetTag("mission.name", run.Name);
+                    // The baggage-borne commander, re-tagged on every tick - visible proof that the
+                    // value travelled from the Web tier without ever being a method parameter.
+                    tick?.SetTag("mission.commander", commander);
                     tick?.SetTag("event", evt);
                     tick?.SetTag("warp_speed", run.WarpSpeed);
                     tick?.SetTag("shield_strength", run.ShieldStrength);
@@ -154,6 +173,15 @@ public sealed class MissionSimulator : IDisposable
                 _logger.LogInformation(
                     "Mission {Ship}: {Event} | warp {Warp}, shields {Shields}%, torpedoes {Torpedoes}",
                     run.Name, evt, run.WarpSpeed, run.ShieldStrength, run.PhotonTorpedoes);
+
+                // A second severity, so "filter by severity" in the dashboard has something to find:
+                // unexpected but recoverable, exactly the Warning row on the log-levels slide.
+                if (run.ShieldStrength is > 0 and < 50)
+                {
+                    _logger.LogWarning(
+                        "Mission {Ship}: shields degraded to {Shields}% - below safe threshold.",
+                        run.Name, run.ShieldStrength);
+                }
 
                 // END CONDITIONS.
                 if (run.ShieldStrength <= 0) { outcome = "Failure"; break; }
@@ -174,11 +202,20 @@ public sealed class MissionSimulator : IDisposable
         run.Status = outcome;
         run.Active = false;
 
-        if (root is not null && outcome == "Failure")
+        if (outcome == "Failure")
         {
             var breach = new InvalidOperationException($"Shields collapsed aboard {run.Name}.");
-            root.SetStatus(ActivityStatusCode.Error, breach.Message);
-            root.AddException(breach); // exception event on the mission span
+
+            // ERROR SPAN: status + an exception event on the mission span.
+            root?.SetStatus(ActivityStatusCode.Error, breach.Message);
+            root?.AddException(breach);
+
+            // ERROR LOG: the matching Error-severity record, correlated to that span by TraceId.
+            // Span and log together are what the "Force failure" checkbox promises.
+            _logger.LogError(
+                breach,
+                "Mission {Ship} failed: shields collapsed after {Elapsed}s.",
+                run.Name, run.ElapsedSeconds);
         }
 
         _completed.Add(
@@ -258,16 +295,24 @@ public sealed class MissionSimulator : IDisposable
             }
 
             mission.Status = run.Status;
-            db.Launches.Add(new Launch
+
+            var launch = new Launch
             {
                 MissionId = run.MissionId,
                 Commander = run.Commander,
                 Priority = run.Priority,
                 LaunchedAtUtc = start,
                 Success = outcome == "Success"
-            });
+            };
 
-            await db.SaveChangesAsync();
+            // TALK HIGHLIGHT - the reusable span factory from ServiceDefaults in actual use.
+            // One line gives us a "db.launch.insert" span whose attributes are auto-tagged from the
+            // entity (db.entity.commander, db.entity.success, ...) with no per-call tagging code.
+            using (MissionTelemetry.ActivitySource.StartDatabaseSpan("db.launch.insert", launch))
+            {
+                db.Launches.Add(launch);
+                await db.SaveChangesAsync();
+            }
         }
         catch (Exception ex)
         {

@@ -2,7 +2,7 @@
   <!--
     Central Package Management (CPM).
     All PackageReference versions are declared here so every project stays in sync.
-    Versions target the .NET 10 / Aspire 13 wave.
+    Versions target the .NET 10 / Aspire 13.5 wave.
   -->
   <PropertyGroup>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
@@ -11,22 +11,54 @@
 
   <ItemGroup>
     <!-- Aspire hosting (AppHost) + integrations -->
-    <PackageVersion Include="Aspire.Hosting.AppHost" Version="13.4.6" />
+    <PackageVersion Include="Aspire.Hosting.AppHost" Version="13.5.3" />
 
     <!-- EF Core + in-memory SQLite (no external database; nothing persists between runs) -->
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.10" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.0" />
 
+    <!--
+      Transitive pin (enabled by CentralPackageTransitivePinningEnabled above): EF Core 10.0.10
+      pulls SQLitePCLRaw 2.1.11, which carries a high-severity advisory (GHSA-2m69-gcr7-jv3q).
+      Pinning the patched build keeps the vulnerable-package scan clean for anyone who clones
+      this repo after the talk. Drop this line once a patched EF Core 10.x ships.
+    -->
+    <PackageVersion Include="SQLitePCLRaw.lib.e_sqlite3" Version="2.1.13" />
+
+    <!--
+      Microsoft.Extensions.AI: the IChatClient abstraction plus its OpenTelemetry wrapper.
+      The wrapper is what emits gen_ai.* spans and token metrics, and it wraps IChatClient
+      rather than any specific provider - which is why the demo's simulated client produces
+      exactly the same telemetry a real model would. Microsoft.Extensions.AI.OpenAI is here
+      so swapping to a real model is a configuration change, not a code change.
+    -->
+    <PackageVersion Include="Microsoft.Extensions.AI" Version="10.9.0" />
+    <PackageVersion Include="Microsoft.Extensions.AI.OpenAI" Version="10.9.0" />
+
     <!-- Shared ServiceDefaults building blocks -->
     <PackageVersion Include="Microsoft.Extensions.Http.Resilience" Version="10.0.0" />
     <PackageVersion Include="Microsoft.Extensions.ServiceDiscovery" Version="10.8.0" />
 
-    <!-- OpenTelemetry: the heart of the talk -->
-    <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.15.3" />
-    <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.15.3" />
-    <PackageVersion Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.15.3" />
-    <PackageVersion Include="OpenTelemetry.Instrumentation.EntityFrameworkCore" Version="1.17.0-beta.1" />
-    <PackageVersion Include="OpenTelemetry.Instrumentation.Http" Version="1.15.3" />
-    <PackageVersion Include="OpenTelemetry.Instrumentation.Runtime" Version="1.15.3" />
+    <!--
+      OpenTelemetry: the heart of the talk. Keep all six on the same 1.18.x line.
+
+      GOTCHA worth knowing about this file: if you write an XML comment here containing a double
+      hyphen (for example, quoting a CLI flag), MSBuild cannot parse Directory.Packages.props at
+      all. Every PackageVersion then vanishes, and the first thing to complain is the Aspire
+      AppHost SDK, with a completely misleading message: "MissionControl.AppHost is an Aspire
+      AppHost project that needs a package reference to Aspire.Hosting.AppHost version 8.2.0 or
+      above". The package reference is fine; the props file just failed to load. If you ever see
+      that error, check this file for a stray double hyphen before you touch any versions.
+
+      Also note the Aspire version lives in two places that must stay in sync: the
+      Aspire.Hosting.AppHost PackageVersion above, and the Aspire.AppHost.Sdk version attribute
+      in MissionControl.AppHost.csproj.
+    -->
+    <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.18.0" />
+    <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.18.0" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.18.0" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.EntityFrameworkCore" Version="1.18.0-beta.1" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.Http" Version="1.18.0" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.Runtime" Version="1.18.0" />
   </ItemGroup>
 </Project>

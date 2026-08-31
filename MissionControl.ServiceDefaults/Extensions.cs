@@ -73,7 +73,10 @@ public static class Extensions
                     .AddHttpClientInstrumentation()   // outgoing HTTP client metrics
                     .AddRuntimeInstrumentation()      // GC, threadpool, etc.
                     // Register OUR custom meter so the missions_launched counter is exported.
-                    .AddMeter(MissionTelemetry.MeterName);
+                    .AddMeter(MissionTelemetry.MeterName)
+                    // GenAI metrics: gen_ai.client.token.usage and gen_ai.client.operation.duration
+                    // are emitted by the Microsoft.Extensions.AI OpenTelemetry wrapper under this name.
+                    .AddMeter(MissionTelemetry.ChatSourceName);
             })
             // ---- TRACES ----
             .WithTracing(tracing =>
@@ -82,6 +85,8 @@ public static class Extensions
                     .AddSource(builder.Environment.ApplicationName)
                     // Register OUR ActivitySource so manual spans (LaunchMission, db.*) are exported.
                     .AddSource(MissionTelemetry.ActivitySourceName)
+                    // GenAI spans ("chat {model}") from the Microsoft.Extensions.AI wrapper.
+                    .AddSource(MissionTelemetry.ChatSourceName)
                     .AddAspNetCoreInstrumentation()   // server spans for incoming requests
                     .AddHttpClientInstrumentation()   // client spans + W3C context/baggage propagation
                     .AddEntityFrameworkCoreInstrumentation();  // DB spans for EF Core queries (works with SQLite)

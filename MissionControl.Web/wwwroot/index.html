@@ -73,7 +73,16 @@
     .chip.traces  { background: var(--accent); }
     .chip.metrics { background: var(--ok); }
     .chip.logs    { background: var(--warn); }
-    .chip.baggage { background: var(--accent-2); color: #fff; }
+    /* Not signals. Outlined rather than filled, so the difference is visible at a glance:
+       Baggage is cross-cutting context, and gen_ai is a set of semantic conventions carried
+       by the three signals above — neither is a fourth signal. */
+    .chip.ctx {
+      background: transparent; border: 1px dashed var(--border);
+      color: var(--muted); font-weight: 600;
+    }
+    .chip.ctx b { color: var(--accent-2); font-weight: 700; }
+    .chip.genai b { color: #b26bff; }
+    .signals .divider { width: 1px; align-self: stretch; background: var(--border); margin: 0 2px; }
     .roster { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
     .ship {
       display: flex; align-items: center; justify-content: space-between;
@@ -139,6 +148,18 @@
     .kv { font-family: "Cascadia Code", Consolas, monospace; font-size: 13px; margin-top: 12px; }
     .kv .pair { display: flex; gap: 8px; padding: 6px 0; border-bottom: 1px dashed var(--border); }
     .kv .k { color: var(--accent); } .kv .v { color: var(--ok); }
+    /* AI debrief */
+    .debrief-text {
+      margin-top: 12px; padding: 12px 14px; border-radius: 10px;
+      border: 1px solid var(--border); border-left: 3px solid #b26bff;
+      background: rgba(178,107,255,.06); font-size: 13.5px; line-height: 1.65;
+    }
+    .tokens {
+      display: flex; gap: 14px; flex-wrap: wrap; margin-top: 10px;
+      font-family: "Cascadia Code", Consolas, monospace; font-size: 12px; color: var(--muted);
+    }
+    .tokens b { color: #b26bff; }
+    .tokens .model { margin-left: auto; }
     .log {
       font-family: "Cascadia Code", Consolas, monospace; font-size: 12.5px;
       background: #060a14; border: 1px solid var(--border); border-radius: 10px;
@@ -166,11 +187,16 @@
 
   <main>
     <div class="signals">
-      <span class="lead">OTel signals being emitted:</span>
+      <span class="lead">The three signals:</span>
       <span class="chip traces">Traces</span>
       <span class="chip metrics">Metrics</span>
       <span class="chip logs">Logs</span>
-      <span class="chip baggage">Baggage</span>
+      <span class="divider"></span>
+      <span class="lead">Carried by them:</span>
+      <span class="chip ctx baggage" title="Cross-cutting context that propagates across spans and services — not a signal.">
+        <b>Baggage</b> &middot; context</span>
+      <span class="chip ctx genai" title="gen_ai.* semantic conventions — attribute names carried by the three signals, not a fourth signal.">
+        <b>gen_ai</b> &middot; conventions</span>
     </div>
 
     <section class="card">
@@ -200,7 +226,7 @@
 
       <div class="row">
         <input type="checkbox" id="forceFailure" />
-        <label for="forceFailure">Force failure (demo error span + error log)</label>
+        <label for="forceFailure">Force failure (fast shield collapse &rarr; error span + Error-level log)</label>
       </div>
 
       <button class="launch" id="launchBtn" disabled>Select a ship to launch</button>
@@ -220,6 +246,19 @@
       <div id="telemetry">
         <div class="placeholder">Select a mission to see its live telemetry.</div>
       </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>AI Mission Debrief</h2>
+        <button id="debriefBtn" disabled>&#129302; Request Debrief</button>
+      </div>
+      <p class="placeholder">
+        Asks a model to narrate the last flight. Produces a <code>mission.debrief</code> span with a
+        <code>chat</code> child carrying <code>gen_ai.*</code> attributes, token metrics, and a
+        correlated log &mdash; all on the same TraceId.
+      </p>
+      <div id="debrief"></div>
     </section>
 
     <section class="card">
@@ -254,6 +293,8 @@
     const selectedHint = document.getElementById('selectedHint');
     const telemetryEl = document.getElementById('telemetry');
     const baggageEl = document.getElementById('baggage');
+    const debriefEl = document.getElementById("debrief");
+    const debriefBtn = document.getElementById("debriefBtn");
 
     function log(msg, cls) {
       const ts = new Date().toLocaleTimeString();
@@ -308,6 +349,7 @@
       selectedId = id;
       selectedName = name;
       selectedHint.textContent = 'Selected: ' + name;
+      debriefBtn.disabled = false;
       loadRoster();
       loadTelemetry();
     }
@@ -422,6 +464,38 @@
       }
     }
 
+    async function requestDebrief() {
+      if (selectedId === null) return;
+      debriefBtn.disabled = true;
+      debriefEl.innerHTML = '<div class="placeholder">Calling the model&hellip;</div>';
+      log('Requesting AI debrief for ' + selectedName + '&hellip;', 'info');
+      try {
+        const res = await fetch('/api/missions/' + selectedId + '/debrief', { method: 'POST' });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          debriefEl.innerHTML = '<div class="placeholder">' +
+            (err.message || 'No flight to debrief yet - launch this ship first.') + '</div>';
+          log('Debrief unavailable: ' + (err.message || res.status), 'warn');
+          return;
+        }
+        const d = await res.json();
+        debriefEl.innerHTML =
+          '<div class="debrief-text">' + d.text + '</div>' +
+          '<div class="tokens">' +
+            '<span><b>' + (d.inputTokens ?? '?') + '</b> in</span>' +
+            '<span><b>' + (d.outputTokens ?? '?') + '</b> out</span>' +
+            '<span class="model">' + (d.modelId || 'unknown model') + '</span>' +
+          '</div>';
+        log('Debrief for ' + d.missionName + ' (' + d.outcome + '): ' +
+            d.inputTokens + ' in / ' + d.outputTokens + ' out via ' + d.modelId, 'ok');
+      } catch (e) {
+        debriefEl.innerHTML = '<div class="placeholder">Debrief failed.</div>';
+        log('Debrief error: ' + e, 'err');
+      } finally {
+        debriefBtn.disabled = false;
+      }
+    }
+
     async function inspectBaggage() {
       log('Inspecting baggage (commander ' + commander() + ', priority ' + priority() + ')&hellip;', 'info');
       try {
@@ -442,6 +516,7 @@
     document.getElementById('resetBtn').onclick = resetAll;
     document.getElementById('loadBtn').onclick = generateLoad;
     document.getElementById('baggageBtn').onclick = inspectBaggage;
+    debriefBtn.onclick = requestDebrief;
     document.getElementById('clearBtn').onclick = () => { logEl.innerHTML = ''; };
     launchBtn.onclick = launch;
 

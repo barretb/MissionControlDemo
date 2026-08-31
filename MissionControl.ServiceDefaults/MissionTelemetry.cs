@@ -22,6 +22,19 @@ public static class MissionTelemetry
     public const string MeterName = "MissionControl.Telemetry";
 
     /// <summary>
+    /// TALK HIGHLIGHT - GenAI telemetry.
+    ///
+    /// Separate well-known name for the AI chat pipeline. Microsoft.Extensions.AI's
+    /// <c>UseOpenTelemetry(sourceName: ...)</c> wrapper creates BOTH an ActivitySource and a Meter
+    /// under this name, so ServiceDefaults registers it with AddSource and AddMeter alike.
+    ///
+    /// Keeping it separate from <see cref="ActivitySourceName"/> means you can sample, filter, or
+    /// route model traffic differently from the rest of the app - which matters, because LLM calls
+    /// are the expensive, slow, and privacy-sensitive part of the system.
+    /// </summary>
+    public const string ChatSourceName = "MissionControl.Chat";
+
+    /// <summary>
     /// The shared ActivitySource used to create manual spans (e.g. "LaunchMission", "db.launch.insert").
     /// Create spans from this anywhere in the app; ServiceDefaults ensures they are exported.
     /// </summary>
@@ -120,15 +133,18 @@ public sealed class MissionMetrics
     }
 
     /// <summary>
-    /// Increments the missions_launched counter, tagged with the ship/mission name and outcome
-    /// so the Aspire dashboard can slice the metric by ship and success/failure.
+    /// Increments the missions_launched counter, tagged with the ship/mission name so the Aspire
+    /// dashboard can slice the metric by ship ("3 launches for Enterprise, 1 for Voyager").
+    ///
+    /// Deliberately NOT tagged with success: at launch time the outcome is unknown, and a dimension
+    /// that is always "true" is worse than no dimension. Outcomes are counted separately, when they
+    /// are actually known, by the mission.completed counter (tagged by outcome).
     /// </summary>
-    public void MissionLaunched(string missionName, bool success)
+    public void MissionLaunched(string missionName)
     {
         _missionsLaunched.Add(
             1,
-            new KeyValuePair<string, object?>("mission.name", missionName),
-            new KeyValuePair<string, object?>("mission.success", success));
+            new KeyValuePair<string, object?>("mission.name", missionName));
     }
 }
 
